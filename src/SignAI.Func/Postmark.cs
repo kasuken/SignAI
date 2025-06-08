@@ -8,11 +8,10 @@ using Newtonsoft.Json;
 using PostmarkDotNet;
 using PostmarkDotNet.Model;
 using PostmarkDotNet.Webhooks;
+using SignAI.Func.Services;
 using SignAI.Func.Settings;
 using System;
 using System.IO;
-using System.Linq;
-using System.Net;
 using System.Threading.Tasks;
 
 namespace SignAI.Func;
@@ -23,32 +22,35 @@ public class Postmark
     private readonly IConfiguration _configuration;
     private readonly EmailSettings _emailSettings;
     private readonly PostmarkSettings _postmarkSettings;
+    private readonly SignatureService _signatureService;
 
     public Postmark(
         ILogger<Postmark> logger,
         IConfiguration configuration,
         IOptions<EmailSettings> emailSettings,
-        IOptions<PostmarkSettings> postmarkSettings)
+        IOptions<PostmarkSettings> postmarkSettings,
+        SignatureService signatureService)
     {
         _logger = logger;
         _configuration = configuration;
         _emailSettings = emailSettings.Value;
         _postmarkSettings = postmarkSettings.Value;
-        
+        _signatureService = signatureService;
+
         // Log configuration values for debugging
         LogConfigurationValues();
     }
-    
+
     private void LogConfigurationValues()
     {
-        _logger.LogInformation("Email Settings loaded: {EmailSettings}", 
+        _logger.LogInformation("Email Settings loaded: {EmailSettings}",
             System.Text.Json.JsonSerializer.Serialize(_emailSettings, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        _logger.LogInformation("Postmark Settings loaded: {PostmarkSettings}", 
+        _logger.LogInformation("Postmark Settings loaded: {PostmarkSettings}",
             System.Text.Json.JsonSerializer.Serialize(_postmarkSettings, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-            
-        _logger.LogInformation("Configuration Email:DefaultSender: {DefaultSender}", 
+
+        _logger.LogInformation("Configuration Email:DefaultSender: {DefaultSender}",
             _configuration["Email:DefaultSender"]);
-        _logger.LogInformation("Direct IConfiguration value for PostmarkServerToken: {Token}", 
+        _logger.LogInformation("Direct IConfiguration value for PostmarkServerToken: {Token}",
             _configuration["PostmarkServerToken"]);
     }
 
@@ -69,6 +71,16 @@ public class Postmark
                 return new BadRequestObjectResult("Invalid webhook message.");
             }
 
+            // create the signature from the webhook data
+            _logger.LogInformation("Extracting user information from webhook message");
+            var signature = await _signatureService.GenerateSignature(webhook.TextBody);
+
+            // create the html answer for the email, with a default message and the signature
+            _logger.LogInformation("Creating HTML email body with signature");
+
+            var htmlBody = _emailSettings.DefaultHtmlTemplate
+                .Replace("{{signature}}", signature.SignatureHtml);
+
             // Process the webhook message
             _logger.LogInformation($"Processing webhook message with ID: {webhook.MessageID}");
 
@@ -84,8 +96,8 @@ public class Postmark
                 From = from,
                 TrackOpens = _emailSettings.TrackOpens,
                 Subject = _emailSettings.DefaultSubject,
-                TextBody = _emailSettings.DefaultTextBody,
-                HtmlBody = _emailSettings.DefaultHtmlTemplate,
+                //TextBody = _emailSettings.DefaultTextBody,
+                HtmlBody = htmlBody,
                 Tag = _emailSettings.DefaultTag,
                 MessageStream = _emailSettings.DefaultMessageStream
             };
@@ -98,7 +110,7 @@ public class Postmark
                 serverToken = _configuration["PostmarkServerToken"];
                 _logger.LogWarning("Using fallback PostmarkServerToken from Values section: {Token}", serverToken);
             }
-            
+
             var client = new PostmarkClient(serverToken);
             var sendResult = await client.SendMessageAsync(message);
 

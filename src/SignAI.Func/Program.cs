@@ -5,6 +5,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using SignAI.Func.Settings;
 using System.IO;
+using Microsoft.SemanticKernel;
+using SignAI.Func.Services;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
@@ -19,7 +21,53 @@ builder.Services
     .AddApplicationInsightsTelemetryWorkerService()
     .ConfigureFunctionsApplicationInsights();
 
+// Add Semantic Kernel
+builder.Services.AddSingleton(sp => 
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var apiKey = config["Values:AI:ApiKey"] ?? config["AI:ApiKey"] ?? string.Empty;
+    var modelId = config["Values:AI:ModelId"] ?? config["AI:ModelId"] ?? "gpt-4";
+    
+    return Kernel.CreateBuilder()
+        .AddOpenAIChatCompletion(modelId, apiKey)
+        .Build();
+});
+
+// Register custom services
+builder.Services.AddSingleton<SignatureService>();
+
 // Configure strongly typed settings with explicit value retrieval
+builder.Services.Configure<AISettings>(options =>
+{
+    // First try to bind from the hierarchical section
+    builder.Configuration.GetSection("AI").Bind(options);
+    
+    // Also try to bind from flattened keys in Values section
+    options.ApiKey = builder.Configuration["Values:AI:ApiKey"] ?? 
+                    builder.Configuration["AI:ApiKey"] ?? 
+                    options.ApiKey;
+    
+    options.ModelId = builder.Configuration["Values:AI:ModelId"] ?? 
+                     builder.Configuration["AI:ModelId"] ?? 
+                     options.ModelId;
+    
+    if (int.TryParse(builder.Configuration["Values:AI:MaxTokens"] ?? 
+                    builder.Configuration["AI:MaxTokens"], out int maxTokens))
+    {
+        options.MaxTokens = maxTokens;
+    }
+    
+    if (float.TryParse(builder.Configuration["Values:AI:Temperature"] ?? 
+                      builder.Configuration["AI:Temperature"], out float temperature))
+    {
+        options.Temperature = temperature;
+    }
+    
+    options.SignaturePrompt = builder.Configuration["Values:AI:SignaturePrompt"] ?? 
+                             builder.Configuration["AI:SignaturePrompt"] ?? 
+                             options.SignaturePrompt;
+});
+
 builder.Services.Configure<EmailSettings>(options => 
 {
     // First try to bind from the hierarchical section
